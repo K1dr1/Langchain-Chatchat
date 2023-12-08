@@ -5,7 +5,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def _split_text_with_regex_from_end(
         text: str, separator: str, keep_separator: bool
 ) -> List[str]:
@@ -17,7 +16,6 @@ def _split_text_with_regex_from_end(
             splits = ["".join(i) for i in zip(_splits[0::2], _splits[1::2])]
             if len(_splits) % 2 == 1:
                 splits += _splits[-1:]
-            # splits = [_splits[0]] + splits
         else:
             splits = re.split(separator, text)
     else:
@@ -83,7 +81,23 @@ class ChineseRecursiveTextSplitter(RecursiveCharacterTextSplitter):
         if _good_splits:
             merged_text = self._merge_splits(_good_splits, _separator)
             final_chunks.extend(merged_text)
-        return [re.sub(r"\n{2,}", "\n", chunk.strip()) for chunk in final_chunks if chunk.strip()!=""]
+
+        # 新增的按标题分块逻辑
+        title_pattern = re.compile(r"\n\d+(\.\d+)*\s+[^\n]+")
+        title_splits = []
+        last_pos = 0
+        for title_match in title_pattern.finditer(text):
+            prev_text = text[last_pos:title_match.start()]
+            if prev_text.strip():
+                title_splits.append(prev_text)
+            last_pos = title_match.start()
+            title_splits.append(title_match.group())
+
+        if last_pos < len(text):
+            title_splits.append(text[last_pos:])
+
+        # 返回按标题分块后的结果
+        return [re.sub(r"\n{2,}", "\n", chunk.strip()) for chunk in title_splits if chunk.strip() != ""]
 
 
 if __name__ == "__main__":
@@ -102,3 +116,4 @@ if __name__ == "__main__":
         chunks = text_splitter.split_text(text)
         for chunk in chunks:
             print(chunk)
+
