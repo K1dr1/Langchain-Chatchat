@@ -15,6 +15,17 @@ from server.knowledge_base.kb_service.base import KBServiceFactory
 from server.db.repository.knowledge_file_repository import get_file_detail
 from langchain.docstore.document import Document
 from typing import List
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import numpy as np
+
+def compute_tfidf_similarity(docs, query):
+    doc_contents = [doc[0].page_content for doc in docs]
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(doc_contents)
+    query_vector = vectorizer.transform([query])
+    cosine_similarities = cosine_similarity(query_vector, tfidf_matrix).flatten()
+    return cosine_similarities
 
 
 class DocumentWithScore(Document):
@@ -34,9 +45,71 @@ def search_docs(
     kb = KBServiceFactory.get_service_by_name(knowledge_base_name)
     if kb is None:
         return []
+
     docs = kb.search_docs(query, top_k, score_threshold)
-    data = [DocumentWithScore(**x[0].dict(), score=x[1]) for x in docs]
+
+    # 提取文档内容用于TF-IDF处理
+    doc_contents = [doc[0].page_content for doc in docs]
+
+    # 初始化TF-IDF向量器并转换文档
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(doc_contents)
+
+    # 将查询转换为TF-IDF向量
+    query_vector = vectorizer.transform([query])
+
+    # 计算相似度
+    cosine_similarities = cosine_similarity(query_vector, tfidf_matrix).flatten()
+
+    # 将相似度分数与文档结合
+    docs_with_scores = [(doc, score) for doc, score in zip(docs, cosine_similarities)]
+
+    # 根据相似度分数对文档进行排序
+    sorted_docs = sorted(docs_with_scores, key=lambda x: x[1], reverse=True)
+
+    # 转换为最终格式
+    data = [DocumentWithScore(**doc[0].dict(), score=score) for doc, score in sorted_docs]
+
     return data
+
+
+def rerank(query_docs: List[Document] = Body(..., description="源query查询相似文档", examples=[]),
+           augment_docs: List[Document] = Body(..., description="增强query查询相似文档", examples=[]),
+           top_k: int = Body(VECTOR_SEARCH_TOP_K, description="匹配向量数"),
+           ) -> List[Document]:
+
+    # 合并源查询文档和增强查询文档
+    all_documents = query_docs + augment_docs
+
+    # 生成文档内容列表
+    doc_contents = [doc.page_content for doc in all_documents]
+
+    # 初始化TF-IDF向量器并转换文档
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(doc_contents)
+
+    # 假设我们需要一个查询来计算相似度，这里我们用所有文档的内容创建一个假查询
+    # 在实际应用中，你需要提供一个真实的查询
+    fake_query = " ".join(doc_contents)  
+    query_vector = vectorizer.transform([fake_query])
+
+    # 计算相似度
+    cosine_similarities = cosine_similarity(query_vector, tfidf_matrix).flatten()
+
+    # 创建文档和它们的TF-IDF分数的元组
+    docs_with_scores = [(doc, score) for doc, score in zip(all_documents, cosine_similarities)]
+
+    # 根据TF-IDF分数对文档进行排序
+    sorted_docs = sorted(docs_with_scores, key=lambda x: x[1], reverse=True)
+
+    # 获取前top_k个文档
+    top_docs = sorted_docs[:top_k]
+
+    # 提取排序后的文档
+    ranked_documents = [doc[0] for doc in top_docs]
+
+    return ranked_documents
+
 
 
 def list_files(
